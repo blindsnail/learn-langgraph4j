@@ -1,0 +1,37 @@
+package org.bsc.langgraph4j.howtos.rag.edge;
+
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.service.AiServices;
+import org.bsc.langgraph4j.action.EdgeAction;
+import org.bsc.langgraph4j.howtos.rag.RagState;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+public class GradeDocumentsEdge implements EdgeAction<RagState> {
+    private static final Logger log = LoggerFactory.getLogger(GradeDocumentsEdge.class);
+
+    private final DocumentGrader documentGrader;
+
+    public GradeDocumentsEdge(ChatModel chatModel) {
+        this.documentGrader = AiServices.create(DocumentGrader.class, chatModel);
+    }
+
+    @Override
+    public String apply(RagState state) {
+        if (state.lastMessage().filter(AiMessage.class::isInstance).isPresent()) {
+            log.info("[Edge:grade_documents] 已有模型直接回答，跳过文档评分，结束工作流");
+            return "respond";
+        }
+        var question = state.originalQuestion();
+        var context = state.documents();
+        String prompt = "Retrieved document:\n" + context + "\n\nUser question: " + question;
+
+        log.info("[Edge:grade_documents] 开始调用模型评估相关性，问题字符数={}，上下文字符数={}",
+                question.length(), context.length());
+        var score = documentGrader.grade(prompt);
+        log.info("[Edge:grade_documents] 文档相关性评分={}", score.binaryScore);
+
+        return "yes".equalsIgnoreCase(score.binaryScore) ? "generate_answer" : "rewrite_question";
+    }
+}
