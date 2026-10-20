@@ -14,10 +14,10 @@
 
     <properties>
         <maven.compiler.release>17</maven.compiler.release>
+        <maven.compiler.parameters>true</maven.compiler.parameters>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <langgraph4j.version>1.9.3</langgraph4j.version>
         <langchain4j.version>1.22.0</langchain4j.version>
-        <!-- LangGraph4j 1.9.x uses the Spring AI 2.x ChatModel.getOptions() API. -->
         <spring-ai.version>2.0.1</spring-ai.version>
         <slf4j.version>2.0.20</slf4j.version>
         <logback.version>1.6.5</logback.version>
@@ -43,6 +43,13 @@
                 <groupId>dev.langchain4j</groupId>
                 <artifactId>langchain4j-bom</artifactId>
                 <version>${langchain4j.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>dev.langchain4j</groupId>
+                <artifactId>langchain4j-community-bom</artifactId>
+                <version>1.22.0-beta32</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -98,6 +105,11 @@
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-anthropic</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-community-dashscope</artifactId>
         </dependency>
     </dependencies>
 
