@@ -13,11 +13,13 @@ import org.bsc.langgraph4j.RunnableConfig;
 import org.bsc.langgraph4j.action.EdgeAction;
 import org.bsc.langgraph4j.howtos.rag.edge.GradeDocumentsEdge;
 import org.bsc.langgraph4j.howtos.rag.node.GenerateAnswerNode;
-import org.bsc.langgraph4j.howtos.rag.node.QueryAndRetrieveNode;
+import org.bsc.langgraph4j.howtos.rag.node.GenerateQueryOrRespondNode;
+import org.bsc.langgraph4j.howtos.rag.node.RetrieveNode;
 import org.bsc.langgraph4j.howtos.rag.node.RewriteQuestionNode;
 import org.bsc.langgraph4j.langchain4j.tool.LC4jToolService;
 
 import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import org.bsc.langgraph4j.action.NodeAction;
 import org.bsc.langgraph4j.langchain4j.serializer.std.LC4jStateSerializer;
@@ -128,8 +130,18 @@ public class CustomRagAgent {
                 .toolsFromObject(new BlogTools(retriever))
                 .build();
 
-        NodeAction<RagState> queryAndRetrieve =
-                loggedNode("query_and_retrieve", new QueryAndRetrieveNode(toolService, chatModel));
+        NodeAction<RagState> generateQueryOrRespond =
+                loggedNode("generate_query_or_respond", new GenerateQueryOrRespondNode(toolService, chatModel));
+
+        NodeAction<RagState> retrieve =
+                loggedNode("retrieve", new RetrieveNode(toolService));
+
+        EdgeAction<RagState> routeOnToolCalls = loggedEdge("route_on_tool_calls", state ->
+                state.lastMessage()
+                        .filter(AiMessage.class::isInstance)
+                        .map(AiMessage.class::cast)
+                        .filter(AiMessage::hasToolExecutionRequests)
+                        .isPresent() ? "retrieve" : "respond");
 
         EdgeAction<RagState> gradeDocuments =
                 loggedEdge("grade_documents", new GradeDocumentsEdge(chatModel));
@@ -143,16 +155,20 @@ public class CustomRagAgent {
         var stateSerializer = new LC4jStateSerializer<>(RagState::new);
 
         return new StateGraph<>(RagState.SCHEMA, stateSerializer)
-                .addNode("query_and_retrieve", node_async(queryAndRetrieve))
+                .addNode("generate_query_or_respond", node_async(generateQueryOrRespond))
+                .addNode("retrieve", node_async(retrieve))
                 .addNode("rewrite_question", node_async(rewriteQuestion))
                 .addNode("generate_answer", node_async(generateAnswer))
-                .addEdge(START, "query_and_retrieve")
-                .addConditionalEdges("query_and_retrieve", edge_async(gradeDocuments), Map.of(
-                        "respond", END,
+                .addEdge(START, "generate_query_or_respond")
+                .addConditionalEdges("generate_query_or_respond", edge_async(routeOnToolCalls), Map.of(
+                        "retrieve", "retrieve",
+                        "respond", END
+                ))
+                .addConditionalEdges("retrieve", edge_async(gradeDocuments), Map.of(
                         "generate_answer", "generate_answer",
                         "rewrite_question", "rewrite_question"
                 ))
-                .addEdge("rewrite_question", "query_and_retrieve")
+                .addEdge("rewrite_question", "generate_query_or_respond")
                 .addEdge("generate_answer", END);
     }
 }

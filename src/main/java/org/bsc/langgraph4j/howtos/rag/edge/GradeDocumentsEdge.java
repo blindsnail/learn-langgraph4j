@@ -1,6 +1,5 @@
 package org.bsc.langgraph4j.howtos.rag.edge;
 
-import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.service.AiServices;
 import org.bsc.langgraph4j.action.EdgeAction;
@@ -19,10 +18,6 @@ public class GradeDocumentsEdge implements EdgeAction<RagState> {
 
     @Override
     public String apply(RagState state) {
-        if (state.lastMessage().filter(AiMessage.class::isInstance).isPresent()) {
-            log.info("[Edge:grade_documents] 已有模型直接回答，跳过文档评分，结束工作流");
-            return "respond";
-        }
         var question = state.originalQuestion();
         var context = state.documents();
         String prompt = "Retrieved document:\n" + context + "\n\nUser question: " + question;
