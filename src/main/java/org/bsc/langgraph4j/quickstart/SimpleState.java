@@ -1,4 +1,4 @@
-package io.learn.langgraph4j;
+package org.bsc.langgraph4j.quickstart;
 
 import org.bsc.langgraph4j.state.AgentState;
 import org.bsc.langgraph4j.state.Channels;

@@ -1,4 +1,4 @@
-package io.learn.langgraph4j.springai;
+package org.bsc.langgraph4j.quickstart.springai;
 
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;

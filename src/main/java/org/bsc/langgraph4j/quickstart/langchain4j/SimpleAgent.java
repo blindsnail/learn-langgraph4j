@@ -1,4 +1,4 @@
-package io.learn.langgraph4j.langchain4j;
+package org.bsc.langgraph4j.quickstart.langchain4j;
 
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.anthropic.AnthropicChatModel;

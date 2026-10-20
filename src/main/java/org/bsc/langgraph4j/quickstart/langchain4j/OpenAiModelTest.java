@@ -1,4 +1,4 @@
-package io.learn.langgraph4j.langchain4j;
+package org.bsc.langgraph4j.quickstart.langchain4j;
 
 import dev.langchain4j.model.chat.Capability;
 import dev.langchain4j.model.chat.ChatModel;

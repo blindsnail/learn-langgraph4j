@@ -1,4 +1,4 @@
-package io.learn.langgraph4j.springai;
+package org.bsc.langgraph4j.quickstart.springai;
 
 import org.bsc.langgraph4j.GraphInput;
 import org.bsc.langgraph4j.GraphStateException;

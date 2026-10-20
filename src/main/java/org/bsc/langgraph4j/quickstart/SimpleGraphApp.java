@@ -1,9 +1,10 @@
-package io.learn.langgraph4j;
+package org.bsc.langgraph4j.quickstart;
 
-import org.bsc.langgraph4j.StateGraph;
-import org.bsc.langgraph4j.GraphStateException;
 import org.bsc.langgraph4j.GraphInput;
+import org.bsc.langgraph4j.GraphStateException;
 import org.bsc.langgraph4j.RunnableConfig;
+import org.bsc.langgraph4j.StateGraph;
+
 import static org.bsc.langgraph4j.action.AsyncNodeAction.node_async;
 import static org.bsc.langgraph4j.StateGraph.START;
 import static org.bsc.langgraph4j.StateGraph.END;
