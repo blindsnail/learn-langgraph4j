@@ -32,9 +32,7 @@ import static org.bsc.langgraph4j.StateGraph.END;
 import static org.bsc.langgraph4j.action.AsyncEdgeAction.edge_async;
 import static org.bsc.langgraph4j.action.AsyncNodeAction.node_async;
 
-
 import java.util.Map;
-
 import java.util.List;
 
 public class CustomRagAgent {

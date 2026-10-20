@@ -1,7 +1,6 @@
 package org.bsc.langgraph4j.howtos.rag.edge;
 
 import dev.langchain4j.model.chat.ChatModel;
-import dev.langchain4j.service.AiServices;
 import org.bsc.langgraph4j.action.EdgeAction;
 import org.bsc.langgraph4j.howtos.rag.RagState;
 import org.slf4j.Logger;
@@ -13,7 +12,7 @@ public class GradeDocumentsEdge implements EdgeAction<RagState> {
     private final DocumentGrader documentGrader;
 
     public GradeDocumentsEdge(ChatModel chatModel) {
-        this.documentGrader = AiServices.create(DocumentGrader.class, chatModel);
+        this.documentGrader = new DocumentGrader(chatModel);
     }
 
     @Override
@@ -25,8 +24,8 @@ public class GradeDocumentsEdge implements EdgeAction<RagState> {
         log.info("[Edge:grade_documents] 开始调用模型评估相关性，问题字符数={}，上下文字符数={}",
                 question.length(), context.length());
         var score = documentGrader.grade(prompt);
-        log.info("[Edge:grade_documents] 文档相关性评分={}", score.binaryScore);
+        log.info("[Edge:grade_documents] 文档相关性评分={}", score);
 
-        return "yes".equalsIgnoreCase(score.binaryScore) ? "generate_answer" : "rewrite_question";
+        return "yes".equalsIgnoreCase(score) ? "generate_answer" : "rewrite_question";
     }
 }
