@@ -10,6 +10,8 @@
     </appender>
 
     <logger name="io.learn.langgraph4j" level="${APP_LOG_LEVEL:-INFO}"/>
+    <logger name="org.bsc.langgraph4j.howtos.rag" level="${APP_LOG_LEVEL:-INFO}"/>
+    <logger name="dev.langchain4j.store.embedding.EmbeddingStoreIngestor" level="DEBUG"/>
 
     <root level="${LOG_LEVEL:-INFO}">
         <appender-ref ref="CONSOLE"/>

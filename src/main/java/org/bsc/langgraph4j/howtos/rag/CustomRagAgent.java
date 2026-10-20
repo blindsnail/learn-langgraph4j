@@ -39,6 +39,8 @@ import dev.langchain4j.invocation.InvocationParameters;
 import org.bsc.langgraph4j.StateGraph;
 import org.bsc.langgraph4j.action.Command;
 import org.jspecify.annotations.NonNull;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import static org.bsc.langgraph4j.StateGraph.START;
 import static org.bsc.langgraph4j.StateGraph.END;
@@ -47,12 +49,17 @@ import static org.bsc.langgraph4j.action.AsyncNodeAction.node_async;
 
 
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.stream.Collectors;
 
 import java.util.List;
 
 public class CustomRagAgent {
+    private static final Logger log = LoggerFactory.getLogger(CustomRagAgent.class);
+
     public static void main(String[] args) throws GraphStateException {
+        log.info("RAG 程序启动，准备加载文档并构建向量索引");
         var embeddingStore = new InMemoryEmbeddingStore<TextSegment>();
 
         var embeddingModel = QwenEmbeddingModel.builder()
@@ -67,14 +74,13 @@ public class CustomRagAgent {
         );
 
         ingestDocs(urls, embeddingModel, embeddingStore);
+        log.info("向量索引已就绪，准备构建并运行 RAG 工作流");
 
         var chatModel = OpenAiChatModel.builder()
                 .modelName("MiniMax-M3")
                 .baseUrl("https://api.minimax.io/v1")
                 .apiKey(System.getenv("MINIMAX_API_KEY"))
                 .temperature(0.0)
-                .logRequests(true)
-                .logResponses(true)
                 .build();
 
         var workflow = buildWorkflow(embeddingStore, embeddingModel, chatModel);
@@ -95,11 +101,25 @@ public class CustomRagAgent {
     private static void ingestDocs(List<String> urls,
                                    EmbeddingModel embeddingModel,
                                    EmbeddingStore<TextSegment> embeddingStore) {
+        long started = System.nanoTime();
+        log.info("准备下载 {} 篇文档", urls.size());
         var docs = urls.stream()
-                .map(url -> UrlDocumentLoader.load(url, new TextDocumentParser()))
+                .map(url -> {
+                    long downloadStarted = System.nanoTime();
+                    log.info("开始下载文档: {}", url);
+                    try {
+                        var document = UrlDocumentLoader.load(url, new TextDocumentParser());
+                        log.info("文档下载完成: {}, 字符数={}, 耗时={} ms",
+                                url, document.text().length(), elapsedMillis(downloadStarted));
+                        return document;
+                    } catch (RuntimeException e) {
+                        log.error("文档下载失败: " + url + ", 耗时=" + elapsedMillis(downloadStarted) + " ms", e);
+                        throw e;
+                    }
+                })
                 .toList();
 
-        var textSplitter = DocumentSplitters.recursive(100, 50);
+        var textSplitter = DocumentSplitters.recursive(1000, 150);
 
         var ingestor = EmbeddingStoreIngestor.builder()
                 .documentSplitter(textSplitter)
@@ -107,7 +127,52 @@ public class CustomRagAgent {
                 .embeddingStore(embeddingStore)
                 .build();
 
-        ingestor.ingest(docs);
+        long ingestionStarted = System.nanoTime();
+        log.info("文档下载完毕，开始切分、向量化并写入存储");
+        try {
+            var result = ingestor.ingest(docs);
+            log.info("文档入库完成，入库耗时={} ms，总耗时={} ms，tokenUsage={}",
+                    elapsedMillis(ingestionStarted), elapsedMillis(started), result.tokenUsage());
+        } catch (RuntimeException e) {
+            log.error("文档入库失败，耗时=" + elapsedMillis(ingestionStarted) + " ms", e);
+            throw e;
+        }
+    }
+
+    private static long elapsedMillis(long started) {
+        return (System.nanoTime() - started) / 1_000_000;
+    }
+
+    private static NodeAction<MessagesState<ChatMessage>> loggedNode(
+            String name, NodeAction<MessagesState<ChatMessage>> action) {
+        return state -> {
+            long started = System.nanoTime();
+            log.info("[Node:{}] 开始，消息数={}", name, state.messages().size());
+            try {
+                var updates = action.apply(state);
+                log.info("[Node:{}] 完成，耗时={} ms", name, elapsedMillis(started));
+                return updates;
+            } catch (Exception e) {
+                log.error("[Node:{}] 失败，耗时={} ms", name, elapsedMillis(started), e);
+                throw e;
+            }
+        };
+    }
+
+    private static EdgeAction<MessagesState<ChatMessage>> loggedEdge(
+            String name, EdgeAction<MessagesState<ChatMessage>> action) {
+        return state -> {
+            long started = System.nanoTime();
+            log.info("[Edge:{}] 开始判断路由", name);
+            try {
+                var route = action.apply(state);
+                log.info("[Edge:{}] 完成，路由={}，耗时={} ms", name, route, elapsedMillis(started));
+                return route;
+            } catch (Exception e) {
+                log.error("[Edge:{}] 失败，耗时={} ms", name, elapsedMillis(started), e);
+                throw e;
+            }
+        };
     }
 
     private static StateGraph<MessagesState<ChatMessage>> buildWorkflow(
@@ -125,7 +190,7 @@ public class CustomRagAgent {
                 .toolsFromObject(new BlogTools(retriever))
                 .build();
 
-        NodeAction<MessagesState<ChatMessage>> generateQueryOrRespond = state -> {
+        NodeAction<MessagesState<ChatMessage>> queryAndRetrieve = loggedNode("query_and_retrieve", state -> {
             var params = ChatRequestParameters.builder()
                     .toolSpecifications(toolService.toolSpecifications())
                     .build();
@@ -133,13 +198,52 @@ public class CustomRagAgent {
                     .parameters(params)
                     .messages(state.messages())
                     .build();
-            var response = chatModel.chat(request);
-            return Map.of("messages", response.aiMessage());
-        };
+            long modelStarted = System.nanoTime();
+            log.info("[Node:query_and_retrieve] 开始调用模型，判断是否需要检索");
+            var aiMessage = chatModel.chat(request).aiMessage();
+            log.info("[Node:query_and_retrieve] 模型调用完成，耗时={} ms", elapsedMillis(modelStarted));
+            if (!aiMessage.hasToolExecutionRequests()) {
+                log.info("[Node:query_and_retrieve] 模型直接回答，无需执行检索工具");
+                return Map.of("messages", aiMessage);
+            }
+
+            // Preserve the same conversation context that the separate retrieve node received.
+            var messages = new ArrayList<>(state.messages());
+            messages.add(aiMessage);
+            var invocationData = new HashMap<>(state.data());
+            invocationData.put("messages", messages);
+
+            long toolsStarted = System.nanoTime();
+            log.info("[Node:query_and_retrieve] 开始执行工具，数量={}，工具={}",
+                    aiMessage.toolExecutionRequests().size(),
+                    aiMessage.toolExecutionRequests().stream().map(tool -> tool.name()).toList());
+            var updates = new HashMap<>(toolService.execute(
+                                aiMessage.toolExecutionRequests(),
+                                InvocationContext.builder()
+                                        .invocationParameters(InvocationParameters.from(invocationData))
+                                        .build(),
+                                "messages")
+                        .thenApply(Command::update)
+                        .join());
+            log.info("[Node:query_and_retrieve] 工具执行完成，耗时={} ms", elapsedMillis(toolsStarted));
+
+            // Return only new messages; MessagesState appends them to the existing history.
+            var newMessages = new ArrayList<ChatMessage>();
+            newMessages.add(aiMessage);
+            for (var result : (List<?>) updates.get("messages")) {
+                newMessages.add((ChatMessage) result);
+            }
+            updates.put("messages", newMessages);
+            return updates;
+        });
 
         var documentGrader = AiServices.create(DocumentGrader.class, chatModel);
 
-        EdgeAction<MessagesState<ChatMessage>> gradeDocuments = state -> {
+        EdgeAction<MessagesState<ChatMessage>> gradeDocuments = loggedEdge("grade_documents", state -> {
+            if (state.lastMessage().filter(AiMessage.class::isInstance).isPresent()) {
+                log.info("[Edge:grade_documents] 已有模型直接回答，跳过文档评分，结束工作流");
+                return "respond";
+            }
             var question = findFirstUserMessage(state.messages());
             var context = state.lastMessage()
                     .filter(ToolExecutionResultMessage.class::isInstance)
@@ -147,64 +251,44 @@ public class CustomRagAgent {
                     .map(ToolExecutionResultMessage::text)
                     .orElse("");
             String prompt = "Retrieved document:\n" + context + "\n\nUser question: " + question;
+            log.info("[Edge:grade_documents] 开始调用模型评估相关性，问题字符数={}，上下文字符数={}",
+                    question.length(), context.length());
             var score = documentGrader.grade(prompt);
+            log.info("[Edge:grade_documents] 文档相关性评分={}", score.binaryScore);
             return "yes".equalsIgnoreCase(score.binaryScore) ? "generate_answer" : "rewrite_question";
-        };
+        });
 
-        NodeAction<MessagesState<ChatMessage>> rewriteQuestion = state -> {
+        NodeAction<MessagesState<ChatMessage>> rewriteQuestion = loggedNode("rewrite_question", state -> {
             var question = findFirstUserMessage(state.messages());
+            log.info("[Node:rewrite_question] 开始调用模型改写问题，原问题字符数={}", question.length());
             var response = chatModel.chat(UserMessage.from("Formulate an improved search question: " + question));
+            log.info("[Node:rewrite_question] 问题改写完成，将重新进入 query_and_retrieve");
             return Map.of("messages", UserMessage.from(response.aiMessage().text()));
-        };
+        });
 
-        NodeAction<MessagesState<ChatMessage>> generateAnswer = state -> {
+        NodeAction<MessagesState<ChatMessage>> generateAnswer = loggedNode("generate_answer", state -> {
             var question = findFirstUserMessage(state.messages());
             var context = findAndJoinToolExecutionResultMessages(state.messages());
             var prompt = "Question: %s\n<context>\n%s\n</context>".formatted(question, context);
+            log.info("[Node:generate_answer] 开始调用模型生成答案，问题字符数={}，上下文字符数={}",
+                    question.length(), context.length());
             var response = chatModel.chat(UserMessage.from(prompt));
             return Map.of("messages", response.aiMessage());
-        };
-
-        EdgeAction<MessagesState<ChatMessage>> routeOnToolCalls = state -> {
-            var last = state.lastMessage().orElse(null);
-            if (last instanceof AiMessage aiMessage && aiMessage.hasToolExecutionRequests()) {
-                return "retrieve";
-            }
-            return "respond";
-        };
-
-        NodeAction<MessagesState<ChatMessage>> retrieve = state -> {
-            var last = state.lastMessage().orElseThrow();
-            if (last instanceof AiMessage aiMessage && aiMessage.hasToolExecutionRequests()) {
-                return toolService.execute(
-                                aiMessage.toolExecutionRequests(),
-                                InvocationContext.builder()
-                                        .invocationParameters(InvocationParameters.from(state.data()))
-                                        .build(),
-                                "messages")
-                        .thenApply(Command::update)
-                        .join();
-            }
-            return Map.of();
-        };
+        });
 
         var stateSerializer = new LC4jStateSerializer<MessagesState<ChatMessage>>(MessagesState::new);
 
         return new StateGraph<>(MessagesState.SCHEMA, stateSerializer)
-                .addNode("generate_query_or_respond", node_async(generateQueryOrRespond))
-                .addNode("retrieve", node_async(retrieve))
+                .addNode("query_and_retrieve", node_async(queryAndRetrieve))
                 .addNode("rewrite_question", node_async(rewriteQuestion))
                 .addNode("generate_answer", node_async(generateAnswer))
-                .addEdge(START, "generate_query_or_respond")
-                .addConditionalEdges("generate_query_or_respond", edge_async(routeOnToolCalls), Map.of(
-                        "retrieve", "retrieve",
-                        "respond", END
-                ))
-                .addConditionalEdges("retrieve", edge_async(gradeDocuments), Map.of(
+                .addEdge(START, "query_and_retrieve")
+                .addConditionalEdges("query_and_retrieve", edge_async(gradeDocuments), Map.of(
+                        "respond", END,
                         "generate_answer", "generate_answer",
                         "rewrite_question", "rewrite_question"
                 ))
-                .addEdge("rewrite_question", "generate_query_or_respond")
+                .addEdge("rewrite_question", "query_and_retrieve")
                 .addEdge("generate_answer", END);
     }
 
